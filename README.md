@@ -78,3 +78,23 @@ Notes on specific columns:
 ## Requirements
 
 - Node.js 18+
+
+## How this was built
+
+This tool was built with [Claude Code](https://claude.com/claude-code),
+Anthropic's CLI coding agent, working interactively with the repo owner.
+
+The process: Claude first used its Chrome browser automation to manually
+open a rarecandy.com profile and figure out how to get the full card list
+out of it. That involved a few dead ends — trying to read the site's
+internal GraphQL API by hooking `fetch` and inspecting network traffic —
+before landing on the approach that actually worked: scrolling the page
+to trigger its lazy-loading and reading the rendered card tiles straight
+out of the DOM. Once that was proven out by hand, Claude turned it into
+this standalone script (swapping the interactive browser session for
+Puppeteer-driven headless Chrome) so it could be run repeatedly from the
+command line instead of walked through manually each time.
+
+An earlier Python-based implementation of this same idea lived in this
+repo first but didn't work reliably; it was deleted and replaced with
+this version.
