@@ -1,0 +1,16 @@
+{
+  "name": "rarecandy-export",
+  "version": "1.0.0",
+  "description": "Export a Rare Candy profile's card portfolio to a PulseTCG-compatible CSV",
+  "private": true,
+  "type": "commonjs",
+  "bin": {
+    "rarecandy-export": "./export.js"
+  },
+  "scripts": {
+    "start": "node export.js"
+  },
+  "dependencies": {
+    "puppeteer": "^24.15.0"
+  }
+}
