@@ -1,3 +1,4 @@
 node_modules/
 *.csv
+!examples/*.csv
 .rarecandy-session.json

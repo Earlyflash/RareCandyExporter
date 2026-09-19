@@ -138,6 +138,10 @@ Notes on specific columns:
 - Each row represents one unique card/variant; duplicates are represented
   via the **Quantity** column rather than repeated rows.
 
+An example output file, [`examples/storm-emeralda-japanese-example.csv`](examples/storm-emeralda-japanese-example.csv),
+shows the format populated with 15 real cards from the Japanese *M6: Storm
+Emeralda* set.
+
 ## Requirements
 
 - Node.js 18+
