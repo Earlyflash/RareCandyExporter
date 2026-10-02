@@ -192,12 +192,26 @@ async function extractCards(page) {
   });
 }
 
+// Returns the profile header's "N cards" total as a { min, max } range, or
+// null if it can't be found. Under 1,000 the header shows the exact count
+// ("925"), but from 1,000 up it abbreviates ("1.64K"), which only pins the
+// total down to the range that rounds to it (1,635-1,644).
 async function extractDeclaredTotal(page) {
-  return page.evaluate(() => {
-    const text = document.body.innerText;
-    const m = text.match(/([\d,]+)\s*\n\s*cards/i);
-    return m ? parseInt(m[1].replace(/,/g, ''), 10) : null;
-  });
+  const text = await page.evaluate(() => document.body.innerText);
+  return parseDeclaredTotal(text);
+}
+
+function parseDeclaredTotal(text) {
+  const m = text.match(/([\d,]+(?:\.(\d+))?)\s*([KM])?\s*\n\s*cards/i);
+  if (!m) return null;
+  const value = parseFloat(m[1].replace(/,/g, ''));
+  if (!m[3]) return { min: value, max: value };
+  const scale = m[3].toUpperCase() === 'M' ? 1e6 : 1e3;
+  const half = (scale / 10 ** (m[2] ? m[2].length : 0)) / 2;
+  return {
+    min: Math.ceil(value * scale - half),
+    max: Math.ceil(value * scale + half) - 1,
+  };
 }
 
 function parseCardEntry(lines) {
@@ -486,8 +500,11 @@ async function main() {
     // scroll loop a concrete target instead of just guessing "done" from
     // a few seconds of no visible growth.
     const declaredTotal = await extractDeclaredTotal(page);
+    if (declaredTotal == null) {
+      console.warn("Warning: couldn't read the profile header's card total, so can't confirm every card loaded.");
+    }
 
-    const finalCount = await autoScrollUntilStable(page, { targetQty: declaredTotal });
+    const finalCount = await autoScrollUntilStable(page, { targetQty: declaredTotal && declaredTotal.min });
     if (finalCount === 0) {
       throw new Error('No cards found. Check that the profile name is correct and its portfolio is public.');
     }
@@ -542,10 +559,15 @@ async function main() {
 
     const summedQty = rows.reduce((s, r) => s + (parseInt(r.quantity, 10) || 0), 0);
 
-    if (declaredTotal != null && declaredTotal !== summedQty) {
-      console.warn(
-        `Warning: profile header reports ${declaredTotal} cards, but extracted rows sum to ${summedQty}. ` +
-        `The page layout may have changed — double check the output before importing.`
+    if (declaredTotal != null && (summedQty < declaredTotal.min || summedQty > declaredTotal.max)) {
+      const declared = declaredTotal.min === declaredTotal.max
+        ? `${declaredTotal.min}` : `${declaredTotal.min}-${declaredTotal.max}`;
+      // A short count usually means the lazy-loaded grid stalled before every
+      // card arrived. Writing that CSV would silently drop cards, so fail
+      // instead and leave any previous export in place.
+      throw new Error(
+        `profile header reports ${declared} cards, but extracted rows sum to ${summedQty}. ` +
+        `The grid may not have finished loading, or the page layout may have changed. Nothing was written.`
       );
     }
 
