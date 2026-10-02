@@ -352,11 +352,64 @@ function saveCookiesFile(file, cookies) {
 function waitForEnter(promptText) {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(promptText, () => {
+    rl.question(promptText, (answer) => {
       rl.close();
-      resolve();
+      resolve(answer);
     });
   });
+}
+
+// The portfolio page itself doesn't render the "Sign In / Up" header text,
+// so sign-in has to be checked on a card page. Any card works; the first
+// one in the grid is used since it's guaranteed to exist for this profile.
+async function firstCardUrl(page, portfolioUrl) {
+  await page.goto(portfolioUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+  const handle = await page.waitForFunction(() => {
+    const a = Array.from(document.querySelectorAll('a[href]')).find((el) => {
+      const parts = new URL(el.getAttribute('href'), 'https://rarecandy.com').pathname.split('/').filter(Boolean);
+      return parts.length === 5 && parts[1] === 'sets';
+    });
+    return a ? a.getAttribute('href') : null;
+  }, { timeout: 30000 });
+  return new URL(await handle.jsonValue(), 'https://rarecandy.com').toString();
+}
+
+async function checkSignedIn(page, cardUrl) {
+  // The user may have left the page mid-navigation (or on a login provider's
+  // domain), so always reload the check page rather than evaluating in place,
+  // and treat a context torn down by a late redirect as "not yet".
+  try {
+    await page.goto(cardUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await new Promise((r) => setTimeout(r, 800));
+    return await page.evaluate(isLoggedInInPage);
+  } catch {
+    return false;
+  }
+}
+
+// Signs `page`'s browser context in as the profile owner before the
+// portfolio scrape starts, so in --headful mode the user can take as long as
+// they like to log in without the scrape racing them (or their clicks
+// navigating the scrape page away mid-scroll). Returns whether it succeeded.
+async function signIn(page, { portfolioUrl, headful, cookiesPath }) {
+  const savedCookies = loadCookiesFile(cookiesPath);
+  if (savedCookies) await page.setCookie(...savedCookies);
+
+  const cardUrl = await firstCardUrl(page, portfolioUrl);
+  let loggedIn = await checkSignedIn(page, cardUrl);
+
+  if (headful) {
+    while (!loggedIn) {
+      console.log('\nPlease sign in to rarecandy.com as the profile owner in the browser window. Take as long as you need.');
+      const answer = await waitForEnter("Press Enter once you are signed in (or type 'skip' to export without M2a variant data): ");
+      if (answer.trim().toLowerCase() === 'skip') break;
+      loggedIn = await checkSignedIn(page, cardUrl);
+      if (!loggedIn) console.log("That doesn't look signed in yet.");
+    }
+  }
+
+  if (loggedIn) saveCookiesFile(cookiesPath, await page.cookies());
+  return loggedIn;
 }
 
 // Returns a new rows array: for each M2a base-set row, replaces the single
@@ -482,7 +535,25 @@ async function main() {
   const { default: puppeteer } = await import('puppeteer');
   const browser = await puppeteer.launch({ headless: !headful });
   try {
-    const page = await browser.newPage();
+    // Sign in (if needed) before scraping, so --headful waits for the user
+    // up front instead of after a long scroll. The scrape itself runs in a
+    // separate, signed-out context so the portfolio renders exactly as it
+    // does for any visitor.
+    let authPage = null;
+    let loggedIn = false;
+    if (m2aVariants) {
+      authPage = (await browser.pages())[0] || await browser.newPage();
+      await authPage.setViewport({ width: 1280, height: 1000 });
+      loggedIn = await signIn(authPage, {
+        portfolioUrl: url,
+        headful,
+        cookiesPath: path.resolve(process.cwd(), cookiesFile),
+      });
+      if (headful && loggedIn) console.log('Signed in — scraping the portfolio now. No need to touch the browser windows.');
+    }
+
+    const scrapeContext = await browser.createBrowserContext();
+    const page = await scrapeContext.newPage();
     await page.setViewport({ width: 1280, height: 1000 });
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
@@ -520,40 +591,21 @@ async function main() {
     if (variantTargets.length > 0 && m2aVariants) {
       console.log(`Found ${variantTargets.length} MEGA Dream ex (M2a) base-set card(s) — fetching per-variant ownership...`);
 
-      const cookiesPath = path.resolve(process.cwd(), cookiesFile);
-      const savedCookies = loadCookiesFile(cookiesPath);
-      if (savedCookies) await page.setCookie(...savedCookies);
-
-      const firstUrl = new URL(variantTargets[0].href, 'https://rarecandy.com').toString();
-      await page.goto(firstUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await new Promise((r) => setTimeout(r, 800));
-      let loggedIn = await page.evaluate(isLoggedInInPage);
-
-      if (!loggedIn) {
-        if (!headful) {
-          throw new Error(
-            'MEGA Dream ex (M2a) variant capture requires being signed in to rarecandy.com as the ' +
-            'profile owner. Re-run with --headful (in addition to --m2a-variants) to log in ' +
-            `interactively — the session is then cached in ${cookiesFile} for next time. Omit ` +
-            '--m2a-variants to export without per-variant finish data.'
-          );
-        }
-        console.log('\nPlease sign in to rarecandy.com as the profile owner in the browser window that just opened.');
-        await waitForEnter('Press Enter here once you are signed in to continue...');
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
-        await new Promise((r) => setTimeout(r, 800));
-        loggedIn = await page.evaluate(isLoggedInInPage);
-      }
-
       if (loggedIn) {
-        saveCookiesFile(cookiesPath, await page.cookies());
-        rows = await enrichM2aVariants(page, rows, {
+        rows = await enrichM2aVariants(authPage, rows, {
           onProgress: (done, total) => {
             if (done === total || done % 10 === 0) console.log(`  ...${done}/${total} M2a cards checked`);
           },
         });
+      } else if (!headful) {
+        throw new Error(
+          'MEGA Dream ex (M2a) variant capture requires being signed in to rarecandy.com as the ' +
+          'profile owner. Re-run with --headful (in addition to --m2a-variants) to log in ' +
+          `interactively — the session is then cached in ${cookiesFile} for next time. Omit ` +
+          '--m2a-variants to export without per-variant finish data.'
+        );
       } else {
-        console.warn('Still not signed in — skipping per-variant finish data for MEGA Dream ex cards.');
+        console.warn('Not signed in — skipping per-variant finish data for MEGA Dream ex cards.');
       }
     }
 

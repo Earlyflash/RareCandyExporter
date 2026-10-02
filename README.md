@@ -94,8 +94,11 @@ signing in to rarecandy.com as the profile owner:
 node export.js Earlyflash earlyflash.csv --m2a-variants --headful
 ```
 
-A visible browser window opens; log in, then press Enter in the terminal
-to continue. The tool then visits each owned M2a base-set card's page,
+A visible browser window opens straight away, before any scraping starts;
+log in at your own pace (there's no timeout), then press Enter in the
+terminal to continue — or type `skip` to export without variant data. Once
+you're signed in, a second window scrapes the portfolio; leave both alone
+until it finishes. The tool then visits each owned M2a base-set card's page,
 reads its finish breakdown, and writes one CSV row per finish (with the
 correct per-unit price and quantity, splitting the old aggregated row).
 The login session is cached in `.rarecandy-session.json`, so subsequent
