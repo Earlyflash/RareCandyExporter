@@ -123,7 +123,7 @@ function scrollProgressInPage() {
   return { count: links.length, qty };
 }
 
-async function autoScrollUntilStable(page, { maxIterations = 600, stableRounds = 6, waitMs = 700, initialLoadGraceRounds = 40, targetQty = null, maxStableRetries = 20 } = {}) {
+async function autoScrollUntilStable(page, { maxIterations = 600, stableRounds = 6, waitMs = 700, initialLoadGraceRounds = 40, targetQty = null, targetMaxQty = targetQty, maxStableRetries = 20 } = {}) {
   let last = -1;
   let lastQty = -1;
   let stable = 0;
@@ -137,7 +137,11 @@ async function autoScrollUntilStable(page, { maxIterations = 600, stableRounds =
       // means "hasn't loaded yet", not "finished scrolling" — don't let it
       // satisfy the stability check. Give it a grace window before giving up.
       if (i >= initialLoadGraceRounds) break;
-    } else if (targetQty != null && qty >= targetQty) {
+    } else if (targetMaxQty != null && qty >= targetMaxQty) {
+      // Only stop early once past the most the header's total can mean: an
+      // abbreviated total ("1.81K" is 1,805-1,814) reached at its bottom end
+      // can still have cards to come, and the last of them, sorted after
+      // every priced card, are the ones with no price (e.g. basic Energy).
       last = count;
       break;
     } else if (count === last) {
@@ -575,7 +579,10 @@ async function main() {
       console.warn("Warning: couldn't read the profile header's card total, so can't confirm every card loaded.");
     }
 
-    const finalCount = await autoScrollUntilStable(page, { targetQty: declaredTotal && declaredTotal.min });
+    const finalCount = await autoScrollUntilStable(page, {
+      targetQty: declaredTotal && declaredTotal.min,
+      targetMaxQty: declaredTotal && declaredTotal.max,
+    });
     if (finalCount === 0) {
       throw new Error('No cards found. Check that the profile name is correct and its portfolio is public.');
     }
